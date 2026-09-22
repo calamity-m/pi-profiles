@@ -1,0 +1,52 @@
+{
+  "name": "pi-profiles",
+  "version": "0.1.0",
+  "description": "Named global extension profiles for Pi",
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "license": "MIT",
+  "author": "calamity-m",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "extensions/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types $(find tests -maxdepth 1 -name '*.test.ts' ! -name '*.integration.test.ts' -print)",
+    "test:integration": "node --test --experimental-strip-types tests/*.integration.test.ts",
+    "lint": "oxlint extensions src tests scripts",
+    "format": "oxfmt --write extensions src tests scripts",
+    "format:check": "oxfmt --check extensions src tests scripts",
+    "pack:dry-run": "npm pack --dry-run"
+  },
+  "dependencies": {
+    "proper-lockfile": "^4.1.2",
+    "semver": "^7.8.5"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.86.1",
+    "@earendil-works/pi-tui": "0.86.1",
+    "@types/node": "^24.10.0",
+    "@types/proper-lockfile": "^4.1.4",
+    "@types/semver": "^7.8.0",
+    "oxfmt": "^0.17.0",
+    "oxlint": "^1.32.0",
+    "typescript": "^5.9.3"
+  }
+}
