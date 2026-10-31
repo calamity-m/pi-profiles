@@ -2,6 +2,7 @@ import { isAbsolute, normalize, relative, sep } from "node:path";
 import type { PackageSource } from "@earendil-works/pi-coding-agent";
 import {
   discover,
+  isBuiltinSelector,
   isDiscoveryRoot,
   selectionSettingsSignature,
   type Catalog,
@@ -49,7 +50,9 @@ export async function projectSelection(
   }
 
   const proposal = structuredClone(document);
-  const roots = ((document.extensions ?? []) as string[]).filter(isDiscoveryRoot);
+  const roots = ((document.extensions ?? []) as string[]).filter(
+    (entry) => isDiscoveryRoot(entry) || isBuiltinSelector(entry),
+  );
   const lockedPaths = new Set(
     catalog.extensions.filter((entry) => entry.locked).map((entry) => entry.path),
   );

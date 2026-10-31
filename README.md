@@ -2,7 +2,7 @@
 
 Named, curated **global extension profiles** for Pi. Profiles share installed packages and remember exclusions—not allowlists. Newly installed extensions and new package entrypoints are enabled by default in every profile.
 
-Requires Node >=22.19.0. Developed and tested against Pi **0.86.1**; discovery/filter compatibility is version-sensitive.
+Requires Node >=22.19.0. Developed and tested against Pi **1.4.0**; discovery/filter compatibility is version-sensitive.
 
 ## Install
 
@@ -33,7 +33,7 @@ Inactive profiles offer **Save**, **Save & activate**, and **Cancel**. Active pr
 
 ## What a profile means
 
-The footer `profile:stable` identifies the **global configured profile**, not every loaded extension. Project settings and CLI `-e` resources are unmanaged and can override/add to the global selection. Other running Pi instances keep their loaded runtime until they reload.
+The footer `profile:stable` identifies the **global configured profile**, not every loaded extension. Project settings and CLI `-e` resources are unmanaged and can override/add to the global selection. Pi's built-in extensions (`codemode`, `tool_search`, MCP) are also unmanaged: explicit `builtin:` selectors are preserved unchanged, not stored per profile. Use `pi config` to manage them. Other running Pi instances keep their loaded runtime until they reload.
 
 Global changes made through `pi config` or `settings.json` become part of the disk-selected profile at the next TUI session start or profile interaction. Inactive profiles are not overwritten. There is no file watcher. If a changed selection is observed after session start, the footer adds `reload needed`; selecting the current profile offers a reload even when its saved-settings diff is empty. Renaming a profile alone does not require reload.
 
@@ -59,9 +59,9 @@ Metadata lives under `piProfiles` in global `settings.json`, alongside the exten
 
 Settings changes require an idle agent. Stale editors fail rather than overwrite concurrent edits to packages, extension selectors, npm lookup configuration or profiles; reopen the editor and retry. Writes lock Pi's logical global settings path, reread fresh unrelated settings, then atomically replace the settings document. Symlinks and existing permissions are preserved. This is atomic replacement, **not power-loss durability**, and noncooperating manual writers can still race.
 
-**Upstream first-creation limitation:** Pi 0.86.1 computes an absent settings file's update before acquiring its lock. Simultaneous first creation by Pi and this manager can therefore lose an update despite cooperative locking. Create the settings file before concurrent use. Existing-file cooperative writes are covered by integration tests.
+**Upstream first-creation limitation:** Pi 1.4.0 computes an absent settings file's update before acquiring its lock. Simultaneous first creation by Pi and this manager can therefore lose an update despite cooperative locking. Create the settings file before concurrent use. Existing-file cooperative writes are covered by integration tests.
 
-Pi 0.86.1 cannot normally filter loose local files registered in `packages`; converting fallback extension-directory packages to filter objects also changes loading semantics. These registrations remain unchanged/read-only. To manage them, manually register the extension file/directory in global `settings.extensions` instead. The manager does not silently migrate them.
+Pi 1.4.0 cannot normally filter loose local files registered in `packages`; converting fallback extension-directory packages to filter objects also changes loading semantics. These registrations remain unchanged/read-only. To manage them, manually register the extension file/directory in global `settings.extensions` instead. The manager does not silently migrate them.
 
 Reload retains the conversation but resets extension memory. Cleanup of resources/processes is cooperative. A resolved reload promise is not proof every extension loaded successfully: Pi reports extension loading errors. Profiles are **not a security boundary**; extensions run with your permissions.
 

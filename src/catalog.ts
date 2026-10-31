@@ -71,9 +71,19 @@ export function selectionSettingsSignature(document: Record<string, unknown>): s
   ]);
 }
 
+/** Built-in extension identities are not filesystem paths and remain unmanaged. */
+export function isBuiltinSelector(entry: string): boolean {
+  return /^[!+-]?builtin:/.test(entry);
+}
+
 /** Pi's top-level plain entries discover resources; all other entries only select them. */
 export function isDiscoveryRoot(entry: string): boolean {
-  return !/^[!+-]/.test(entry) && !entry.includes("*") && !entry.includes("?");
+  return (
+    !isBuiltinSelector(entry) &&
+    !/^[!+-]/.test(entry) &&
+    !entry.includes("*") &&
+    !entry.includes("?")
+  );
 }
 
 function absolutePath(input: string, base: string): string {
@@ -397,7 +407,9 @@ export async function discover(
       pkg.root,
       typeof pkg.registration === "object" ? (pkg.registration.autoload ?? true) : true,
     ]),
-    ((document.extensions ?? []) as string[]).filter(isDiscoveryRoot),
+    ((document.extensions ?? []) as string[]).filter(
+      (entry) => isDiscoveryRoot(entry) || isBuiltinSelector(entry),
+    ),
     extensions
       .filter((entry) => entry.enabled)
       .map((entry) => [entry.path, entry.canonicalPath, entry.owner]),

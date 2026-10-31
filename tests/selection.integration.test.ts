@@ -110,6 +110,30 @@ test("top-level discovery roots remain and exact exclusions replace selectors", 
   assert.deepEqual(next.extensions, [loose, `-${loose}`]);
 });
 
+test("Pi 1.4 built-in selectors survive discovery and profile switches unchanged", async () => {
+  const selectors = [
+    "builtin:codemode",
+    "-builtin:mcp",
+    "+builtin:tool_search",
+    "!builtin:future*",
+  ];
+  const document = { packages: [root], extensions: selectors };
+  const catalog = await discover(document, agent, manager);
+  assert.deepEqual(
+    new Set(catalog.extensions.map((entry) => entry.path)),
+    new Set([manager, a, b]),
+  );
+  const disabled = await projectSelection(document, catalog, [a]);
+  assert.deepEqual(disabled.extensions, selectors);
+  const fresh = await discover(disabled, agent, manager);
+  const enabled = await projectSelection(disabled, fresh, []);
+  assert.deepEqual(enabled.extensions, selectors);
+  assert.equal(
+    (await discover(enabled, agent, manager)).extensions.find((e) => e.path === a)?.enabled,
+    true,
+  );
+});
+
 test("unsupported registrations stay unchanged and cannot be disabled", async () => {
   const loose = await file(join(home, "loose.ts"));
   const document = { packages: [loose, root] };
