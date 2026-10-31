@@ -6,11 +6,9 @@ Requires Node >=22.19.0. Developed and tested against Pi **1.4.0**; discovery/fi
 
 ## Install
 
-From this checkout:
 
 ```sh
-npm ci
-pi install /absolute/path/to/pi-profiles
+pi install git:git@github.com:calamity-m/pi-profiles
 ```
 
 Restart Pi or use `/reload`. Install globally: project-only installation or `pi -e` alone cannot provide persistent profile management. The manager is locked on in every profile.
