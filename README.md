@@ -2,7 +2,7 @@
 
 Named, curated **global extension profiles** for Pi. Profiles share installed packages and remember exclusions—not allowlists. Newly installed extensions and new package entrypoints are enabled by default in every profile.
 
-Requires Node >=22.19.0. Developed and tested against Pi **1.4.0**; discovery/filter compatibility is version-sensitive.
+Requires Node >=22.19.0. Developed and tested against Pi **1.5.0**; discovery/filter compatibility is version-sensitive.
 
 ## Install
 
@@ -57,9 +57,9 @@ Metadata lives under `piProfiles` in global `settings.json`, alongside the exten
 
 Settings changes require an idle agent. Stale editors fail rather than overwrite concurrent edits to packages, extension selectors, npm lookup configuration or profiles; reopen the editor and retry. Writes lock Pi's logical global settings path, reread fresh unrelated settings, then atomically replace the settings document. Symlinks and existing permissions are preserved. This is atomic replacement, **not power-loss durability**, and noncooperating manual writers can still race.
 
-**Upstream first-creation limitation:** Pi 1.4.0 computes an absent settings file's update before acquiring its lock. Simultaneous first creation by Pi and this manager can therefore lose an update despite cooperative locking. Create the settings file before concurrent use. Existing-file cooperative writes are covered by integration tests.
+**Upstream first-creation limitation:** Pi 1.5.0 computes an absent settings file's update before acquiring its lock. Simultaneous first creation by Pi and this manager can therefore lose an update despite cooperative locking. Create the settings file before concurrent use. Existing-file cooperative writes are covered by integration tests.
 
-Pi 1.4.0 cannot normally filter loose local files registered in `packages`; converting fallback extension-directory packages to filter objects also changes loading semantics. These registrations remain unchanged/read-only. To manage them, manually register the extension file/directory in global `settings.extensions` instead. The manager does not silently migrate them.
+Pi 1.5.0 cannot normally filter loose local files registered in `packages`; converting fallback extension-directory packages to filter objects also changes loading semantics. These registrations remain unchanged/read-only. To manage them, manually register the extension file/directory in global `settings.extensions` instead. The manager does not silently migrate them.
 
 Reload retains the conversation but resets extension memory. Cleanup of resources/processes is cooperative. A resolved reload promise is not proof every extension loaded successfully: Pi reports extension loading errors. Profiles are **not a security boundary**; extensions run with your permissions.
 

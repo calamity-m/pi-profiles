@@ -110,7 +110,7 @@ test("top-level discovery roots remain and exact exclusions replace selectors", 
   assert.deepEqual(next.extensions, [loose, `-${loose}`]);
 });
 
-test("Pi 1.4 built-in selectors survive discovery and profile switches unchanged", async () => {
+test("Pi built-in selectors survive discovery and profile switches unchanged", async () => {
   const selectors = [
     "builtin:codemode",
     "-builtin:mcp",
