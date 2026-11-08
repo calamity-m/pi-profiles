@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import * as callbackFs from "node:fs";
 import fs from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
@@ -214,6 +215,16 @@ export async function commitSettings(
     patch.piProfiles = JSON.parse(JSON.stringify(serializeState(patch.piProfiles)));
   await fs.mkdir(dirname(snapshot.path), { recursive: true });
   const options = {
+    // proper-lockfile defines a non-configurable precision-cache symbol on this object.
+    // Keep that cache on a plain local adapter, never on a sandbox-proxied fs module.
+    fs: {
+      mkdir: callbackFs.mkdir,
+      stat: callbackFs.stat,
+      utimes: callbackFs.utimes,
+      rmdir: callbackFs.rmdir,
+      rmdirSync: callbackFs.rmdirSync,
+      realpath: callbackFs.realpath,
+    },
     realpath: false,
     retries: { retries: 10, minTimeout: 20, maxTimeout: 50, factor: 1.2 },
   };

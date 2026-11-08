@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import * as callbackFs from "node:fs";
 import fs from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -280,6 +281,40 @@ test("settings failure restores existing metadata or removes newly created metad
     assert.deepEqual(await readSettings(path), before);
     await commitSettings(before, selection("other"));
   }
+});
+
+test("repeated locks keep the precision cache on a local adapter, not the runtime fs module", async (t) => {
+  const { path } = await fixture(t, {});
+  const runtimeSymbols = Object.getOwnPropertySymbols(callbackFs);
+  const adapters: object[] = [];
+  const lock = lockfile.lock.bind(lockfile);
+  const mocked = t.mock.method(
+    lockfile,
+    "lock",
+    async (file: string, options?: lockfile.LockOptions) => {
+      assert.ok(options?.fs, "must supply a local filesystem adapter");
+      assert.notEqual(options.fs, callbackFs);
+      adapters.push(options.fs);
+      return lock(file, options);
+    },
+  );
+  try {
+    for (const name of ["one", "two", "three"]) {
+      await commitSettings(await readSettings(path), selection(name));
+    }
+  } finally {
+    mocked.mock.restore();
+  }
+  assert.equal(adapters.length, 6);
+  for (const adapter of adapters) {
+    const cached = Object.getOwnPropertySymbols(adapter);
+    assert.equal(cached.length, 1, "proper-lockfile caches timestamp precision on the adapter");
+    const descriptor = Object.getOwnPropertyDescriptor(adapter, cached[0])!;
+    assert.equal(descriptor.configurable, false);
+    assert.equal(descriptor.writable, false);
+    assert.ok(["s", "ms"].includes(Reflect.get(adapter, cached[0])));
+  }
+  assert.deepEqual(Object.getOwnPropertySymbols(callbackFs), runtimeSymbols);
 });
 
 test("standalone metadata lock contention releases the Pi settings lock", async (t) => {
