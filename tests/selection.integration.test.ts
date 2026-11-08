@@ -31,6 +31,16 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
+test("home-relative exclusions apply to discovered absolute paths", async () => {
+  const document = { packages: [root] };
+  const catalog = await discover(document, agent, manager);
+  const next = await projectSelection(document, catalog, ["~/package/extensions/a.ts"]);
+  const verified = await discover(next, agent, manager);
+  assert.equal(verified.extensions.find((entry) => entry.path === a)?.enabled, false);
+  assert.equal(verified.extensions.find((entry) => entry.path === b)?.enabled, true);
+  assert.deepEqual(next, await projectSelection(document, catalog, [a]));
+});
+
 test("string conversion preserves omitted non-extension manifest types and unrelated fields", async () => {
   await file(join(root, "prompts", "hello.md"), "Hello");
   await file(

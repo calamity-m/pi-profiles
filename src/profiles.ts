@@ -1,4 +1,5 @@
-import { isAbsolute, normalize } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, join, normalize, relative, sep } from "node:path";
 
 /** A curated selection expressed as exclusions of logical entrypoint paths. */
 export interface Profile {
@@ -41,17 +42,40 @@ export function validateName(name: string): void {
   }
 }
 
-/** Normalize logical absolute paths and deduplicate without resolving symlinks. */
+/** Expand home-relative paths and deduplicate logical identities without resolving symlinks. */
 export function normalizeExclusions(paths: readonly string[]): string[] {
   if (!Array.isArray(paths)) throw new Error("Profile disabled must be an array");
   const result = new Set<string>();
   for (const path of paths) {
-    if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0")) {
-      throw new Error("Exclusions must be absolute entrypoint paths without NUL characters");
+    if (
+      typeof path !== "string" ||
+      (!isAbsolute(path) && path !== "~" && !path.startsWith("~/")) ||
+      path.includes("\0")
+    ) {
+      throw new Error("Exclusions must be absolute or ~/ entrypoint paths without NUL characters");
     }
-    result.add(normalize(path));
+    result.add(
+      normalize(
+        path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path,
+      ),
+    );
   }
   return [...result];
+}
+
+/** Return settings metadata with paths inside the current home written as ~/... . */
+export function serializeState(input: unknown): ProfileState {
+  const state = validateState(input);
+  for (const profile of Object.values(state.profiles)) {
+    profile.disabled = profile.disabled.map((path) => {
+      const suffix = relative(homedir(), path);
+      if (suffix === "") return "~";
+      return !isAbsolute(suffix) && suffix !== ".." && !suffix.startsWith(`..${sep}`)
+        ? `~/${suffix.split(sep).join("/")}`
+        : path;
+    });
+  }
+  return state;
 }
 
 /** Validate an initialized namespace and return an independent, normalized copy. */

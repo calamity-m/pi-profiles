@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   createProfile,
   deleteProfile,
@@ -7,6 +9,7 @@ import {
   normalizeExclusions,
   reconcileProfile,
   renameProfile,
+  serializeState,
   validateName,
   validateState,
   type ProfileState,
@@ -59,13 +62,52 @@ test("normalizes and deduplicates logical absolute identities without filesystem
     normalizeExclusions(["/not-installed/a/../b.ts", "/not-installed/b.ts", "/one//two.ts"]),
     ["/not-installed/b.ts", "/one/two.ts"],
   );
-  for (const value of ["relative.ts", "~/extension.ts", "", "/bad\0.ts", 1, null]) {
+  for (const value of [
+    "relative.ts",
+    "~someone/extension.ts",
+    "~relative",
+    "",
+    "/bad\0.ts",
+    "~/bad\0.ts",
+    1,
+    null,
+  ]) {
     assert.throws(() => normalizeExclusions([value as string]));
   }
   assert.throws(() => normalizeExclusions("/file.ts" as unknown as string[]));
   const sparse: string[] = [];
   sparse.length = 1;
   assert.throws(() => normalizeExclusions(sparse));
+});
+
+test("home-relative exclusions normalize, deduplicate and round-trip without changing other paths", () => {
+  const home = homedir();
+  const inside = join(home, ".pi", "extension.ts");
+  assert.deepEqual(normalizeExclusions(["~/.pi/./extension.ts", inside, "~"]), [inside, home]);
+  const input = {
+    version: 1,
+    active: "default",
+    profiles: {
+      default: {
+        description: "Portable",
+        disabled: [inside, `${home}-other/extension.ts`, join(home, "..", "outside.ts")],
+      },
+    },
+  };
+  const saved = serializeState(input);
+  assert.deepEqual(saved.profiles.default.disabled, [
+    "~/.pi/extension.ts",
+    `${home}-other/extension.ts`,
+    join(home, "..", "outside.ts"),
+  ]);
+  assert.deepEqual(validateState(saved), validateState(input));
+  assert.deepEqual(serializeState(saved), saved);
+  assert.equal(input.profiles.default.disabled[0], inside);
+  assert.equal(
+    serializeState({ ...input, profiles: { default: { disabled: [home] } } }).profiles.default
+      .disabled[0],
+    "~",
+  );
 });
 
 test("validation returns an independent normalized state and preserves descriptions", () => {

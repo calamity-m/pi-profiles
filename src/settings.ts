@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
-import { validateState } from "./profiles.ts";
+import { serializeState, validateState } from "./profiles.ts";
 
 /** Global JSON settings; unknown Pi and extension keys are preserved. */
 export type GlobalSettings = Record<string, unknown>;
@@ -153,6 +153,8 @@ export async function commitSettings(
   validateDocument(proposed);
   // Freeze the proposal before yielding to a lock wait, without retaining mutable caller objects.
   const patch = JSON.parse(JSON.stringify(proposed)) as GlobalSettings;
+  if (Object.hasOwn(patch, "piProfiles"))
+    patch.piProfiles = JSON.parse(JSON.stringify(serializeState(patch.piProfiles)));
   await fs.mkdir(dirname(snapshot.path), { recursive: true });
   const release = await lockfile.lock(snapshot.path, {
     realpath: false,

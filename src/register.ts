@@ -12,6 +12,7 @@ import {
   duplicateProfile,
   reconcileProfile,
   renameProfile,
+  serializeState,
   validateState,
   type ProfileState,
 } from "./profiles.ts";
@@ -102,7 +103,7 @@ export function register(pi: ExtensionAPI, managerPath: string, agentDir = getAg
       catalog,
       state.profiles[state.active].disabled,
     );
-    proposed.piProfiles = state;
+    proposed.piProfiles = serializeState(state);
     if (JSON.stringify(proposed) !== JSON.stringify(snapshot.document)) {
       snapshot = await save(ctx, snapshot, proposed, catalog);
       catalog = await discover(snapshot.document, agentDir, managerPath);
@@ -165,7 +166,7 @@ export function register(pi: ExtensionAPI, managerPath: string, agentDir = getAg
               catalog,
               state.profiles.default.disabled,
             );
-            proposed.piProfiles = state;
+            proposed.piProfiles = serializeState(state);
             snapshot = await save(ctx, snapshot, proposed, catalog);
             catalog = await discover(snapshot.document, agentDir, managerPath);
             // First capture preserves current selection, but is not a runtime observation.
@@ -317,7 +318,7 @@ export function register(pi: ExtensionAPI, managerPath: string, agentDir = getAg
               catalog,
               state.profiles[name].disabled,
             );
-            proposed.piProfiles = { ...state, active: name };
+            proposed.piProfiles = serializeState({ ...state, active: name });
             await save(ctx, snapshot, proposed, catalog);
             reloading = true;
             await ctx.reload();

@@ -157,7 +157,28 @@ test("uninitialized startup/completions/cancel never write; first capture preser
   await put({ extensions: [`-${a}`] });
   h.confirmations.push(true);
   await h.run();
-  assert.deepEqual((await disk()).piProfiles.profiles.default.disabled, [a]);
+  assert.deepEqual((await disk()).piProfiles.profiles.default.disabled, [
+    "~/agent/extensions/a.ts",
+  ]);
+  assert.equal(h.reloads, 0);
+});
+
+test("startup accepts home-relative metadata and canonical saves are stable", async () => {
+  await put({
+    ...initial(),
+    extensions: [`-${a}`],
+    piProfiles: {
+      version: 1,
+      active: "default",
+      profiles: { default: { disabled: ["~/agent/extensions/a.ts"] } },
+    },
+  });
+  const before = await readFile(settings, "utf8");
+  const h = harness();
+  await h.start();
+  await h.start();
+  assert.equal(await readFile(settings, "utf8"), before);
+  assert.deepEqual(h.notices, []);
   assert.equal(h.reloads, 0);
 });
 
@@ -217,7 +238,9 @@ test("inactive save changes metadata only; active apply reloads", async () => {
   }, "apply");
   await h.run("edit default");
   assert.equal(h.reloads, 1);
-  assert.deepEqual((await disk()).piProfiles.profiles.default.disabled, [a]);
+  assert.deepEqual((await disk()).piProfiles.profiles.default.disabled, [
+    "~/agent/extensions/a.ts",
+  ]);
 });
 
 test("stale drafts and busy-after-editor actions do not commit or reload", async () => {
@@ -233,7 +256,9 @@ test("stale drafts and busy-after-editor actions do not commit or reload", async
     });
     await h.run("edit small");
     assert.equal(h.reloads, 0);
-    assert.deepEqual((await disk()).piProfiles.profiles.small.disabled, [a]);
+    assert.deepEqual((await disk()).piProfiles.profiles.small.disabled, [
+      change === "disk" ? a : "~/agent/extensions/a.ts",
+    ]);
     assert.match(h.notices.at(-1)!, change === "disk" ? /stale/ : /busy/);
   }
 });
@@ -267,7 +292,9 @@ test("normalizing external selectors then switching uses the refreshed catalog",
   await h.run("use small");
   assert.deepEqual(h.notices, []);
   assert.equal(h.reloads, 1);
-  assert.deepEqual((await disk()).piProfiles.profiles.default.disabled, [a]);
+  assert.deepEqual((await disk()).piProfiles.profiles.default.disabled, [
+    "~/agent/extensions/a.ts",
+  ]);
 });
 
 test("incomplete inventory blocks reconciliation and every profile write", async () => {
@@ -308,7 +335,9 @@ test("create draft cancellation leaves no new profile; duplicate and delete are 
   h.inputs.push("copy");
   h.choices.push("duplicate", "small", null);
   await h.run("manage");
-  assert.deepEqual((await disk()).piProfiles.profiles.copy, { disabled: [a] });
+  assert.deepEqual((await disk()).piProfiles.profiles.copy, {
+    disabled: ["~/agent/extensions/a.ts"],
+  });
   h.choices.push("delete", "copy", null);
   h.confirmations.push(true);
   await h.run("manage");

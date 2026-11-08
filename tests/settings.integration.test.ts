@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -115,6 +115,28 @@ test("absent settings stay absent on read, then commit privately in a missing pa
   assert.deepEqual(after, await readSettings(path));
   assert.equal((await fs.stat(path)).mode & 0o777, 0o600);
   assert.deepEqual(await fs.readdir(dirname(path)), ["settings.json"]);
+});
+
+test("commits home-relative profile paths without changing selectors or caller data", async (t) => {
+  const { path } = await fixture(t);
+  const absolute = join(homedir(), ".pi", "extensions", "off.ts");
+  const proposal = selection();
+  proposal.extensions = [`-${absolute}`];
+  proposal.piProfiles = {
+    version: 1,
+    active: "default",
+    profiles: { default: { disabled: [absolute, "~/.pi/extensions/off.ts", "/outside/off.ts"] } },
+  };
+  const original = structuredClone(proposal);
+  const saved = await commitSettings(await readSettings(path), proposal);
+  assert.deepEqual(saved, await readSettings(path));
+  assert.deepEqual(saved.document.extensions, [`-${absolute}`]);
+  assert.deepEqual(saved.document.piProfiles, {
+    version: 1,
+    active: "default",
+    profiles: { default: { disabled: ["~/.pi/extensions/off.ts", "/outside/off.ts"] } },
+  });
+  assert.deepEqual(proposal, original);
 });
 
 test("validates JSON roots, selectors, sources, argv, and strict profile metadata", async (t) => {

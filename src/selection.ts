@@ -1,4 +1,5 @@
-import { isAbsolute, normalize, relative, sep } from "node:path";
+import { relative, sep } from "node:path";
+import { normalizeExclusions } from "./profiles.ts";
 import type { PackageSource } from "@earendil-works/pi-coding-agent";
 import {
   discover,
@@ -33,10 +34,7 @@ export async function projectSelection(
   if (selectionSettingsSignature(document) !== catalog.settingsSignature) {
     throw new Error("Settings changed since discovery. Refresh the profile catalog and try again.");
   }
-  if (disabled.some((path) => typeof path !== "string" || !isAbsolute(path))) {
-    throw new Error("Profile exclusions must be absolute extension paths.");
-  }
-  const exclusions = new Set(disabled.map((path) => normalize(path)));
+  const exclusions = new Set(normalizeExclusions(disabled));
   const desired = new Map(
     catalog.extensions.map((entry) => [entry.path, entry.locked || !exclusions.has(entry.path)]),
   );
