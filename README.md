@@ -35,27 +35,29 @@ The footer `profile:stable` identifies the **global configured profile**, not ev
 
 Global changes made through `pi config` or `settings.json` become part of the disk-selected profile at the next TUI session start or profile interaction. Inactive profiles are not overwritten. There is no file watcher. If a changed selection is observed after session start, the footer adds `reload needed`; selecting the current profile offers a reload even when its saved-settings diff is empty. Renaming a profile alone does not require reload.
 
-Exclusions accept absolute entrypoint paths or home-relative paths such as `~/.pi/agent/extensions/example.ts`. Paths are expanded and normalized internally; paths within the current user’s home directory are saved as `~/...` in `piProfiles.profiles.*.disabled`. Existing absolute paths remain supported; `~user/...` and other relative paths are not supported. Reinstalling the same identity retains exclusions; moved/renamed paths are new identities. Exact selectors are retained for missing paths. When an entire package registration is removed, its exclusions remain as top-level `-path` markers; reconciliation moves those markers back into package filters if the same identity returns. Home-relative exclusions can be shared between machines with the same layout under home; absolute paths outside home remain machine-specific. Discovery roots and generated Pi selectors are unchanged. A package with no extensions is fine; unresolved or incompatible packages, malformed configuration, conflicting ownership/aliases, or an unrepresentable selection block writes rather than erase saved exclusions.
+Exclusions accept absolute entrypoint paths or home-relative paths such as `~/.pi/agent/extensions/example.ts`. Paths are expanded and normalized internally; paths within the current user’s home directory are saved as `~/...` in `pi-profiles.json` under `profiles.*.disabled`. Existing absolute paths remain supported; `~user/...` and other relative paths are not supported. Reinstalling the same identity retains exclusions; moved/renamed paths are new identities. Exact selectors are retained for missing paths. When an entire package registration is removed, its exclusions remain as top-level `-path` markers; reconciliation moves those markers back into package filters if the same identity returns. Home-relative exclusions can be shared between machines with the same layout under home; absolute paths outside home remain machine-specific. Discovery roots and generated Pi selectors are unchanged. A package with no extensions is fine; unresolved or incompatible packages, malformed configuration, conflicting ownership/aliases, or an unrepresentable selection block writes rather than erase saved exclusions.
 
 Non-extension resources and unrelated settings are preserved. Package sources, versions, order and `autoload` are not managed. This extension never installs, removes or updates packages during inventory. Pi's normal reload can perform its own resource resolution. Legacy npm lookup may execute your configured `npmCommand` wrapper to locate global storage.
 
 ## Persistence and safety
 
-Metadata lives under `piProfiles` in global `settings.json`, alongside the extension selectors it describes:
+Profile metadata lives in **`~/.pi/agent/pi-profiles.json`** (or `pi-profiles.json` in your custom Pi agent directory), separate from Pi's `settings.json`:
 
 ```json
 {
-  "piProfiles": {
-    "version": 1,
-    "active": "default",
-    "profiles": {
-      "default": { "disabled": [] }
-    }
+  "version": 1,
+  "active": "default",
+  "profiles": {
+    "default": { "disabled": [] }
   }
 }
 ```
 
-Settings changes require an idle agent. Stale editors fail rather than overwrite concurrent edits to packages, extension selectors, npm lookup configuration or profiles; reopen the editor and retry. Writes lock Pi's logical global settings path, reread fresh unrelated settings, then atomically replace the settings document. Symlinks and existing permissions are preserved. This is atomic replacement, **not power-loss durability**, and noncooperating manual writers can still race.
+Pi's extension selectors still live in `settings.json`, where Pi needs them to load the selected profile. Profile-only edits do not rewrite that file. If `settings.json` is symlinked, metadata still lives beside the logical settings path, not beside its target.
+
+Existing `piProfiles` metadata in `settings.json` is read without modification and migrated on the next successful save/reconciliation that writes settings. Migration writes the standalone file before removing the legacy key; reads alone never migrate. If both files contain metadata, they must agree. Conflicting copies block writes: back up both files, choose the metadata to keep in `pi-profiles.json`, and remove the legacy `piProfiles` key from `settings.json`.
+
+Settings changes require an idle agent. Stale editors fail rather than overwrite concurrent edits to packages, extension selectors, npm lookup configuration or profiles; reopen the editor and retry. Writes lock both Pi's logical global settings path and the profile metadata path, reread fresh unrelated settings, then atomically replace each changed document. Symlinks and existing permissions are preserved; new files use mode `0600`. The two files are **not a crash-atomic transaction**, and writes are **not power-loss durable**. Metadata is written first; a failed settings write attempts to restore the previous metadata. A crash between replacements can leave metadata and selectors out of sync (or conflicting legacy metadata during migration). Back up both files before manual recovery. Noncooperating manual writers can still race.
 
 **Upstream first-creation limitation:** Pi 1.5.0 computes an absent settings file's update before acquiring its lock. Simultaneous first creation by Pi and this manager can therefore lose an update despite cooperative locking. Create the settings file before concurrent use. Existing-file cooperative writes are covered by integration tests.
 
@@ -65,7 +67,7 @@ Reload retains the conversation but resets extension memory. Cleanup of resource
 
 ## Recovery
 
-Fix invalid JSON, malformed `piProfiles`, or unknown schema versions in global `settings.json`; they are never silently replaced with defaults. Resolve missing packages using Pi's normal package commands, then retry. If an extension prevents profile switching, use `pi config` to disable it, fix settings, or restart Pi. Settings represent committed selection; runtime failures do not cause automatic transactional rollback.
+Fix invalid JSON or selectors in global `settings.json`, and malformed profile metadata or unknown schema versions in `pi-profiles.json` (or the legacy `piProfiles` key in `settings.json`); they are never silently replaced with defaults. Resolve missing packages using Pi's normal package commands, then retry. If an extension prevents profile switching, use `pi config` to disable it, fix settings, or restart Pi. Settings represent committed selection; runtime failures do not cause automatic transactional rollback.
 
 Profile management is interactive-TUI-only. Print, JSON and RPC sessions neither prompt nor mutate profile settings.
 

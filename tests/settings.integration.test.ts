@@ -8,7 +8,13 @@ import { test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import lockfile from "proper-lockfile";
-import { commitSettings, fingerprint, readSettings, type GlobalSettings } from "../src/settings.ts";
+import {
+  commitSettings,
+  fingerprint,
+  profilesPath,
+  readSettings,
+  type GlobalSettings,
+} from "../src/settings.ts";
 
 async function fixture(t: TestContext, document?: GlobalSettings) {
   const dir = await fs.mkdtemp(join(tmpdir(), "pi-profiles-settings-"));
@@ -114,7 +120,9 @@ test("absent settings stay absent on read, then commit privately in a missing pa
   const after = await commitSettings(before, selection());
   assert.deepEqual(after, await readSettings(path));
   assert.equal((await fs.stat(path)).mode & 0o777, 0o600);
-  assert.deepEqual(await fs.readdir(dirname(path)), ["settings.json"]);
+  assert.deepEqual(await fs.readdir(dirname(path)), ["pi-profiles.json", "settings.json"]);
+  assert.equal((await fs.stat(profilesPath(path))).mode & 0o777, 0o600);
+  assert.equal(Object.hasOwn(JSON.parse(await fs.readFile(path, "utf8")), "piProfiles"), false);
 });
 
 test("commits home-relative profile paths without changing selectors or caller data", async (t) => {
@@ -183,6 +191,104 @@ test("validates JSON roots, selectors, sources, argv, and strict profile metadat
   };
   await fs.writeFile(path, `\uFEFF${JSON.stringify(valid)}`);
   assert.deepEqual((await readSettings(path)).document, valid);
+});
+
+test("legacy metadata migrates on commit, never on read, with selectors and unrelated keys retained", async (t) => {
+  const legacy: GlobalSettings = { ...selection(), theme: "dark" };
+  const { path } = await fixture(t, legacy);
+  const before = await readSettings(path);
+  await assert.rejects(fs.stat(profilesPath(path)), { code: "ENOENT" });
+  assert.deepEqual(JSON.parse(await fs.readFile(path, "utf8")), legacy);
+  const after = await commitSettings(before, before.document);
+  assert.deepEqual(after.document, legacy);
+  assert.deepEqual(JSON.parse(await fs.readFile(profilesPath(path), "utf8")), legacy.piProfiles);
+  const { piProfiles: _metadata, ...global } = legacy;
+  assert.deepEqual(JSON.parse(await fs.readFile(path, "utf8")), global);
+});
+
+test("metadata-only edits leave Pi settings byte-for-byte unchanged", async (t) => {
+  const { path } = await fixture(t, { theme: "dark" });
+  const original = await fs.readFile(path, "utf8");
+  await commitSettings(await readSettings(path), {
+    theme: "dark",
+    piProfiles: selection().piProfiles,
+  });
+  assert.equal(await fs.readFile(path, "utf8"), original);
+  await commitSettings(await readSettings(path), {
+    theme: "dark",
+    piProfiles: selection("other").piProfiles,
+  });
+  assert.equal(await fs.readFile(path, "utf8"), original);
+});
+
+test("invalid, conflicting and externally edited standalone metadata is never overwritten", async (t) => {
+  const { path } = await fixture(t, {});
+  for (const invalid of ["{broken", "null", JSON.stringify({ version: 99 })]) {
+    await fs.writeFile(profilesPath(path), invalid);
+    await assert.rejects(readSettings(path));
+    assert.equal(await fs.readFile(profilesPath(path), "utf8"), invalid);
+  }
+  await fs.writeFile(profilesPath(path), JSON.stringify(selection().piProfiles));
+  const before = await readSettings(path);
+  await fs.writeFile(profilesPath(path), JSON.stringify(selection("external").piProfiles));
+  await assert.rejects(commitSettings(before, selection("draft")), /changed.*stale/);
+  await fs.writeFile(path, JSON.stringify(selection()));
+  await assert.rejects(readSettings(path), /Conflicting profile metadata/);
+});
+
+test("standalone metadata preserves symlinks and permissions and rejects retargeted drafts", async (t) => {
+  const { dir, path } = await fixture(t, {});
+  const target = join(dir, "metadata.json");
+  await fs.writeFile(target, JSON.stringify(selection().piProfiles), { mode: 0o640 });
+  await fs.symlink("metadata.json", profilesPath(path));
+  await commitSettings(await readSettings(path), selection("other"));
+  assert.equal(await fs.readlink(profilesPath(path)), "metadata.json");
+  assert.equal((await fs.stat(target)).mode & 0o777, 0o640);
+  const before = await readSettings(path);
+  await fs.writeFile(join(dir, "replacement.json"), await fs.readFile(target));
+  await fs.unlink(profilesPath(path));
+  await fs.symlink("replacement.json", profilesPath(path));
+  await assert.rejects(commitSettings(before, selection()), /target changed/);
+});
+
+test("settings failure rolls metadata back and keeps legacy migration recoverable", async (t) => {
+  for (const migrated of [false, true]) {
+    const { path } = await fixture(t, selection());
+    if (migrated) await commitSettings(await readSettings(path), selection());
+    const before = await readSettings(path);
+    const rename = fs.rename.bind(fs);
+    const mocked = t.mock.method(fs, "rename", async (from: string, to: string) => {
+      if (to === before.target) throw new Error("settings rename denied");
+      return rename(from, to);
+    });
+    try {
+      await assert.rejects(
+        commitSettings(before, {
+          ...selection("other"),
+          extensions: ["/different.ts"],
+        }),
+        /settings rename denied/,
+      );
+    } finally {
+      mocked.mock.restore();
+    }
+    assert.deepEqual(await readSettings(path), before);
+    await commitSettings(before, selection("other"));
+  }
+});
+
+test("standalone metadata lock contention releases the Pi settings lock", async (t) => {
+  const { path } = await fixture(t, {});
+  const before = await readSettings(path);
+  const release = await lockfile.lock(profilesPath(path), { realpath: false });
+  try {
+    await assert.rejects(commitSettings(before, selection()), { code: "ELOCKED" });
+    const releaseGlobal = await lockfile.lock(path, { realpath: false });
+    await releaseGlobal();
+  } finally {
+    await release();
+  }
+  await commitSettings(before, selection());
 });
 
 test("fingerprint ignores unrelated settings and key order, but retains array order and absence", () => {
@@ -291,7 +397,7 @@ test("two simultaneous profile writers commit exactly one complete proposal", as
 test("atomic replacement exposes complete old-or-new JSON to unlocked readers", async (t) => {
   const { path } = await fixture(t, selection("old"));
   const before = await readSettings(path);
-  const next = {
+  const next: GlobalSettings = {
     ...selection("new"),
     packages: Array.from({ length: 3000 }, (_, i) => `./pkg-${i}`),
   };
@@ -301,7 +407,8 @@ test("atomic replacement exposes complete old-or-new JSON to unlocked readers", 
   });
   do {
     const document = JSON.parse(await fs.readFile(path, "utf8")) as GlobalSettings;
-    assert.ok([before.fingerprint, fingerprint(next)].includes(fingerprint(document)));
+    const { piProfiles: _metadata, ...nextGlobal } = next;
+    assert.ok([before.fingerprint, fingerprint(nextGlobal)].includes(fingerprint(document)));
   } while (!done);
   await writing;
 });
@@ -391,6 +498,9 @@ test(
     await fs.writeFile(barrier, "resume");
     assert.deepEqual(await pi.message(), { errors: [] });
     await pi.exited;
-    assert.deepEqual((await readSettings(path)).document, { theme: "light" });
+    assert.deepEqual((await readSettings(path)).document, {
+      theme: "light",
+      piProfiles: selection().piProfiles,
+    });
   },
 );

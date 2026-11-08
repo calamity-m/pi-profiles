@@ -13,6 +13,20 @@ export interface SettingsSnapshot {
   document: GlobalSettings;
   fingerprint: string;
   target: string;
+  profiles: JsonFile;
+  globalFingerprint: string;
+}
+
+interface JsonFile {
+  path: string;
+  target: string;
+  value: unknown;
+  exists: boolean;
+}
+
+/** Profile metadata sits beside Pi's logical settings path, including with symlinked settings. */
+export function profilesPath(settingsPath: string): string {
+  return join(dirname(resolve(settingsPath)), "pi-profiles.json");
 }
 
 const managedKeys = ["packages", "extensions", "npmCommand", "piProfiles"] as const;
@@ -122,87 +136,158 @@ async function resolveTarget(path: string, links = 0): Promise<string> {
   return join(await resolveTarget(parent, links), basename(path));
 }
 
-/** Read and validate global settings without creating a file or normalizing unrelated values. */
-export async function readSettings(path: string): Promise<SettingsSnapshot> {
+async function readJson(path: string): Promise<JsonFile> {
   path = resolve(path);
   const target = await resolveTarget(path);
-  let document: unknown = {};
+  let value: unknown;
+  let exists = false;
   try {
     const stat = await fs.stat(target);
     if (!stat.isFile()) throw new Error(`Settings target is not a regular file: ${target}`);
     const content = await fs.readFile(target, "utf8");
-    document = JSON.parse(content.replace(/^\uFEFF/, ""));
+    value = JSON.parse(content.replace(/^\uFEFF/, ""));
+    exists = true;
   } catch (error) {
     if (!missing(error)) throw error;
   }
-  validateDocument(document);
   if ((await resolveTarget(path)) !== target)
     throw new Error("Settings symlink target changed; reopen the profile draft");
-  return { path, document, fingerprint: fingerprint(document), target };
+  return { path, target, value, exists };
+}
+
+/** Read both files without creating or migrating anything. piProfiles is an internal merged view. */
+export async function readSettings(path: string): Promise<SettingsSnapshot> {
+  const global = await readJson(path);
+  const document = global.exists ? global.value : {};
+  validateDocument(document);
+  const profiles = await readJson(profilesPath(global.path));
+  if (profiles.target === global.target)
+    throw new Error("Profile metadata and Pi settings must be separate files");
+  if (profiles.exists) {
+    validateState(profiles.value);
+    if (
+      Object.hasOwn(document, "piProfiles") &&
+      JSON.stringify(canonical(document.piProfiles)) !== JSON.stringify(canonical(profiles.value))
+    ) {
+      throw new Error(
+        "Conflicting profile metadata in settings.json and pi-profiles.json; remove the legacy piProfiles key after choosing which to keep",
+      );
+    }
+  }
+  const merged = { ...document };
+  if (profiles.exists) merged.piProfiles = profiles.value;
+  return {
+    path: global.path,
+    target: global.target,
+    document: merged,
+    fingerprint: fingerprint(merged),
+    profiles,
+    globalFingerprint: fingerprint(document),
+  };
+}
+
+/** Atomic replacement of one JSON document, retaining links and permissions. */
+async function replaceJson(file: JsonFile, value: unknown): Promise<void> {
+  let mode = 0o600;
+  try {
+    mode = (await fs.stat(file.target)).mode & 0o7777;
+  } catch (error) {
+    if (!missing(error)) throw error;
+  }
+  await fs.mkdir(dirname(file.target), { recursive: true });
+  const temporary = join(dirname(file.target), `.${basename(file.target)}.${randomUUID()}.tmp`);
+  try {
+    const handle = await fs.open(temporary, "wx", 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+      await handle.chmod(mode);
+    } finally {
+      await handle.close();
+    }
+    if ((await resolveTarget(file.path)) !== file.target)
+      throw new Error("Settings symlink target changed; reopen the profile draft");
+    await fs.rename(temporary, file.target);
+  } finally {
+    await fs.rm(temporary, { force: true });
+  }
 }
 
 /**
- * Atomically replace managed fields, preserving freshly read unrelated keys.
- * Cooperates with Pi's logical-path lock, not manual writers; no power-loss durability is promised.
- * Pi computes absent-file writes before locking, so simultaneous first creation remains unsafe upstream.
+ * Lock both logical paths, reject stale drafts and replace each file atomically.
+ * Metadata is written first so migration never removes the only copy.
+ * The pair is not crash-atomic; a failed settings write restores the old metadata.
  */
 export async function commitSettings(
   snapshot: SettingsSnapshot,
   proposed: GlobalSettings,
 ): Promise<SettingsSnapshot> {
   validateDocument(proposed);
-  // Freeze the proposal before yielding to a lock wait, without retaining mutable caller objects.
   const patch = JSON.parse(JSON.stringify(proposed)) as GlobalSettings;
   if (Object.hasOwn(patch, "piProfiles"))
     patch.piProfiles = JSON.parse(JSON.stringify(serializeState(patch.piProfiles)));
   await fs.mkdir(dirname(snapshot.path), { recursive: true });
-  const release = await lockfile.lock(snapshot.path, {
+  const options = {
     realpath: false,
     retries: { retries: 10, minTimeout: 20, maxTimeout: 50, factor: 1.2 },
-  });
-  let temporary: string | undefined;
+  };
+  const release = await lockfile.lock(snapshot.path, options);
   try {
-    const fresh = await readSettings(snapshot.path);
-    if (fresh.target !== snapshot.target)
-      throw new Error("Settings symlink target changed; reopen the profile draft");
-    if (fresh.fingerprint !== snapshot.fingerprint)
-      throw new Error("Settings changed; reopen the stale profile draft");
-    const document = { ...fresh.document };
-    for (const key of managedKeys) {
-      if (Object.hasOwn(patch, key)) document[key] = patch[key];
-      else delete document[key];
-    }
-    let mode = 0o600;
+    const releaseProfiles = await lockfile.lock(snapshot.profiles.path, options);
     try {
-      mode = (await fs.stat(fresh.target)).mode & 0o7777;
-    } catch (error) {
-      if (!missing(error)) throw error;
-    }
-    await fs.mkdir(dirname(fresh.target), { recursive: true });
-    temporary = join(dirname(fresh.target), `.${basename(fresh.target)}.${randomUUID()}.tmp`);
-    const file = await fs.open(temporary, "wx", 0o600);
-    try {
-      await file.writeFile(`${JSON.stringify(document, null, 2)}\n`, "utf8");
-      await file.chmod(mode);
+      const fresh = await readSettings(snapshot.path);
+      if (fresh.target !== snapshot.target || fresh.profiles.target !== snapshot.profiles.target)
+        throw new Error("Settings symlink target changed; reopen the profile draft");
+      if (
+        fresh.fingerprint !== snapshot.fingerprint ||
+        fresh.globalFingerprint !== snapshot.globalFingerprint ||
+        fresh.profiles.exists !== snapshot.profiles.exists
+      )
+        throw new Error("Settings changed; reopen the stale profile draft");
+      const document = { ...fresh.document };
+      for (const key of managedKeys) {
+        if (Object.hasOwn(patch, key)) document[key] = patch[key];
+        else delete document[key];
+      }
+      const state = document.piProfiles;
+      delete document.piProfiles;
+      // Profile deletion is not a supported operation (the last profile cannot be deleted).
+      if (state === undefined && fresh.profiles.exists)
+        throw new Error("Cannot remove initialized profile metadata");
+      const metadataChanged =
+        state !== undefined &&
+        (!fresh.profiles.exists ||
+          JSON.stringify(canonical(state)) !== JSON.stringify(canonical(fresh.profiles.value)));
+      if (metadataChanged) await replaceJson(fresh.profiles, state);
+      try {
+        const global = await readJson(fresh.path);
+        if (global.target !== snapshot.target)
+          throw new Error("Settings symlink target changed; reopen the profile draft");
+        // No need to rewrite settings for metadata-only edits.
+        if (
+          JSON.stringify(canonical(global.exists ? global.value : {})) !==
+          JSON.stringify(canonical(document))
+        ) {
+          await replaceJson(global, document);
+        }
+      } catch (error) {
+        if (metadataChanged) {
+          try {
+            if (fresh.profiles.exists) await replaceJson(fresh.profiles, fresh.profiles.value);
+            else await fs.unlink(fresh.profiles.target);
+          } catch (rollbackError) {
+            throw new AggregateError(
+              [error, rollbackError],
+              "Settings write and profile rollback failed; inspect settings.json and pi-profiles.json",
+            );
+          }
+        }
+        throw error;
+      }
+      return await readSettings(snapshot.path);
     } finally {
-      await file.close();
+      await releaseProfiles();
     }
-    if ((await resolveTarget(snapshot.path)) !== snapshot.target) {
-      throw new Error("Settings symlink target changed; reopen the profile draft");
-    }
-    await fs.rename(temporary, fresh.target);
-    temporary = undefined;
-    return {
-      path: snapshot.path,
-      document,
-      fingerprint: fingerprint(document),
-      target: fresh.target,
-    };
   } finally {
-    try {
-      if (temporary) await fs.rm(temporary, { force: true });
-    } finally {
-      await release();
-    }
+    await release();
   }
 }

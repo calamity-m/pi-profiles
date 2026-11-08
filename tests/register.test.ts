@@ -41,10 +41,18 @@ const initial = () => ({
   },
 });
 async function disk() {
-  return JSON.parse(await readFile(settings, "utf8"));
+  const document = JSON.parse(await readFile(settings, "utf8"));
+  try {
+    document.piProfiles = JSON.parse(await readFile(join(dir, "pi-profiles.json"), "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return document;
 }
-async function put(value: unknown) {
-  await writeFile(settings, JSON.stringify(value));
+async function put(value: Record<string, unknown>) {
+  const { piProfiles, ...document } = value;
+  await writeFile(settings, JSON.stringify(document));
+  if (piProfiles) await writeFile(join(dir, "pi-profiles.json"), JSON.stringify(piProfiles));
 }
 
 function harness() {
