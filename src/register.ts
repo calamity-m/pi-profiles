@@ -194,10 +194,10 @@ export function register(pi: ExtensionAPI, managerPath: string, agentDir = getAg
           if (action === "manage") {
             const operation = await pickAction(ctx, "Manage profiles", [
               { value: "new", label: "Create profile" },
+              { value: "edit", label: "Edit extensions" },
               { value: "duplicate", label: "Duplicate profile" },
               { value: "rename", label: "Rename profile" },
               { value: "description", label: "Edit description" },
-              { value: "edit", label: "Edit extensions" },
               { value: "delete", label: "Delete profile" },
             ]);
             if (!operation) continue;
