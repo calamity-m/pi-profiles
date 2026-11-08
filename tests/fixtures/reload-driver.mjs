@@ -28,15 +28,18 @@ await writeFile(
   settingsPath,
   JSON.stringify({
     packages: [repo, { source: pkg, extensions: ["-bravo.js"] }],
-    piProfiles: {
-      version: 1,
-      active: "alpha",
-      profiles: {
-        alpha: { disabled: [join(pkg, "bravo.js")] },
-        bravo: { disabled: [join(pkg, "alpha.js")] },
-      },
-    },
     enableInstallTelemetry: false,
+  }),
+);
+await writeFile(
+  join(agentDir, "pi-profiles.json"),
+  JSON.stringify({
+    version: 1,
+    active: "alpha",
+    profiles: {
+      alpha: { disabled: [join(pkg, "bravo.js")] },
+      bravo: { disabled: [join(pkg, "alpha.js")] },
+    },
   }),
 );
 const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });

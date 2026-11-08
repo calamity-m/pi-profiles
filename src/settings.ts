@@ -14,7 +14,6 @@ export interface SettingsSnapshot {
   fingerprint: string;
   target: string;
   profiles: JsonFile;
-  globalFingerprint: string;
 }
 
 interface JsonFile {
@@ -88,7 +87,6 @@ export function validateDocument(value: unknown): asserts value is GlobalSetting
     // Pi treats an empty argv as its default npm command.
     if (command.length) text(command[0], "npmCommand[0]");
   }
-  if (Object.hasOwn(value, "piProfiles")) validateState(value.piProfiles);
 }
 
 function canonical(value: unknown): unknown {
@@ -155,7 +153,7 @@ async function readJson(path: string): Promise<JsonFile> {
   return { path, target, value, exists };
 }
 
-/** Read both files without creating or migrating anything. piProfiles is an internal merged view. */
+/** Read both files without writes. Only standalone metadata populates the internal piProfiles view. */
 export async function readSettings(path: string): Promise<SettingsSnapshot> {
   const global = await readJson(path);
   const document = global.exists ? global.value : {};
@@ -163,18 +161,9 @@ export async function readSettings(path: string): Promise<SettingsSnapshot> {
   const profiles = await readJson(profilesPath(global.path));
   if (profiles.target === global.target)
     throw new Error("Profile metadata and Pi settings must be separate files");
-  if (profiles.exists) {
-    validateState(profiles.value);
-    if (
-      Object.hasOwn(document, "piProfiles") &&
-      JSON.stringify(canonical(document.piProfiles)) !== JSON.stringify(canonical(profiles.value))
-    ) {
-      throw new Error(
-        "Conflicting profile metadata in settings.json and pi-profiles.json; remove the legacy piProfiles key after choosing which to keep",
-      );
-    }
-  }
+  if (profiles.exists) validateState(profiles.value);
   const merged = { ...document };
+  delete merged.piProfiles;
   if (profiles.exists) merged.piProfiles = profiles.value;
   return {
     path: global.path,
@@ -182,7 +171,6 @@ export async function readSettings(path: string): Promise<SettingsSnapshot> {
     document: merged,
     fingerprint: fingerprint(merged),
     profiles,
-    globalFingerprint: fingerprint(document),
   };
 }
 
@@ -214,7 +202,6 @@ async function replaceJson(file: JsonFile, value: unknown): Promise<void> {
 
 /**
  * Lock both logical paths, reject stale drafts and replace each file atomically.
- * Metadata is written first so migration never removes the only copy.
  * The pair is not crash-atomic; a failed settings write restores the old metadata.
  */
 export async function commitSettings(
@@ -239,7 +226,6 @@ export async function commitSettings(
         throw new Error("Settings symlink target changed; reopen the profile draft");
       if (
         fresh.fingerprint !== snapshot.fingerprint ||
-        fresh.globalFingerprint !== snapshot.globalFingerprint ||
         fresh.profiles.exists !== snapshot.profiles.exists
       )
         throw new Error("Settings changed; reopen the stale profile draft");
@@ -262,6 +248,9 @@ export async function commitSettings(
         const global = await readJson(fresh.path);
         if (global.target !== snapshot.target)
           throw new Error("Settings symlink target changed; reopen the profile draft");
+        // Legacy metadata is opaque and unmanaged, just like other unrelated settings.
+        if (isObject(global.value) && Object.hasOwn(global.value, "piProfiles"))
+          document.piProfiles = global.value.piProfiles;
         // No need to rewrite settings for metadata-only edits.
         if (
           JSON.stringify(canonical(global.exists ? global.value : {})) !==

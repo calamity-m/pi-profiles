@@ -40,7 +40,9 @@ test("missing child and removed/reinstalled package keep exact previous exclusio
     };
     document.packages = [pkg];
     const settings = join(agent, "settings.json");
-    await writeFile(settings, JSON.stringify(document));
+    const { piProfiles, ...global } = document;
+    await writeFile(settings, JSON.stringify(global));
+    await writeFile(join(agent, "pi-profiles.json"), JSON.stringify(piProfiles));
     let startup!: (_event: unknown, ctx: ExtensionContext) => Promise<void>;
     register(
       {

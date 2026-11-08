@@ -20,7 +20,11 @@ async function fixture(t: TestContext, document?: GlobalSettings) {
   const dir = await fs.mkdtemp(join(tmpdir(), "pi-profiles-settings-"));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const path = join(dir, "settings.json");
-  if (document) await fs.writeFile(path, JSON.stringify(document));
+  if (document) {
+    const { piProfiles, ...global } = document;
+    await fs.writeFile(path, JSON.stringify(global));
+    if (piProfiles) await fs.writeFile(profilesPath(path), JSON.stringify(piProfiles));
+  }
   return { dir, path };
 }
 
@@ -172,9 +176,6 @@ test("validates JSON roots, selectors, sources, argv, and strict profile metadat
     { npmCommand: "npm" },
     { npmCommand: [""] },
     { npmCommand: ["npm", false] },
-    { piProfiles: null },
-    { piProfiles: {} },
-    { piProfiles: { version: 2, active: "default", profiles: { default: { disabled: [] } } } },
   ];
   for (const document of invalid) {
     await fs.writeFile(path, JSON.stringify(document));
@@ -193,17 +194,19 @@ test("validates JSON roots, selectors, sources, argv, and strict profile metadat
   assert.deepEqual((await readSettings(path)).document, valid);
 });
 
-test("legacy metadata migrates on commit, never on read, with selectors and unrelated keys retained", async (t) => {
-  const legacy: GlobalSettings = { ...selection(), theme: "dark" };
-  const { path } = await fixture(t, legacy);
-  const before = await readSettings(path);
-  await assert.rejects(fs.stat(profilesPath(path)), { code: "ENOENT" });
-  assert.deepEqual(JSON.parse(await fs.readFile(path, "utf8")), legacy);
-  const after = await commitSettings(before, before.document);
-  assert.deepEqual(after.document, legacy);
-  assert.deepEqual(JSON.parse(await fs.readFile(profilesPath(path), "utf8")), legacy.piProfiles);
-  const { piProfiles: _metadata, ...global } = legacy;
-  assert.deepEqual(JSON.parse(await fs.readFile(path, "utf8")), global);
+test("legacy metadata is ignored and preserved, never migrated or validated", async (t) => {
+  const { path } = await fixture(t);
+  for (const legacy of [selection("legacy").piProfiles, null, { version: 99 }]) {
+    await fs.writeFile(path, JSON.stringify({ theme: "dark", piProfiles: legacy }));
+    const before = await readSettings(path);
+    assert.deepEqual(before.document, { theme: "dark" });
+    await commitSettings(before, before.document);
+    await assert.rejects(fs.stat(profilesPath(path)), { code: "ENOENT" });
+    await commitSettings(await readSettings(path), selection());
+    assert.deepEqual((await readSettings(path)).document.piProfiles, selection().piProfiles);
+    assert.deepEqual(JSON.parse(await fs.readFile(path, "utf8")).piProfiles, legacy);
+    await fs.unlink(profilesPath(path));
+  }
 });
 
 test("metadata-only edits leave Pi settings byte-for-byte unchanged", async (t) => {
@@ -221,7 +224,7 @@ test("metadata-only edits leave Pi settings byte-for-byte unchanged", async (t) 
   assert.equal(await fs.readFile(path, "utf8"), original);
 });
 
-test("invalid, conflicting and externally edited standalone metadata is never overwritten", async (t) => {
+test("invalid and externally edited standalone metadata is never overwritten", async (t) => {
   const { path } = await fixture(t, {});
   for (const invalid of ["{broken", "null", JSON.stringify({ version: 99 })]) {
     await fs.writeFile(profilesPath(path), invalid);
@@ -233,7 +236,10 @@ test("invalid, conflicting and externally edited standalone metadata is never ov
   await fs.writeFile(profilesPath(path), JSON.stringify(selection("external").piProfiles));
   await assert.rejects(commitSettings(before, selection("draft")), /changed.*stale/);
   await fs.writeFile(path, JSON.stringify(selection()));
-  await assert.rejects(readSettings(path), /Conflicting profile metadata/);
+  assert.deepEqual(
+    (await readSettings(path)).document.piProfiles,
+    selection("external").piProfiles,
+  );
 });
 
 test("standalone metadata preserves symlinks and permissions and rejects retargeted drafts", async (t) => {
@@ -251,10 +257,9 @@ test("standalone metadata preserves symlinks and permissions and rejects retarge
   await assert.rejects(commitSettings(before, selection()), /target changed/);
 });
 
-test("settings failure rolls metadata back and keeps legacy migration recoverable", async (t) => {
-  for (const migrated of [false, true]) {
-    const { path } = await fixture(t, selection());
-    if (migrated) await commitSettings(await readSettings(path), selection());
+test("settings failure restores existing metadata or removes newly created metadata", async (t) => {
+  for (const initialized of [false, true]) {
+    const { path } = await fixture(t, initialized ? selection() : {});
     const before = await readSettings(path);
     const rename = fs.rename.bind(fs);
     const mocked = t.mock.method(fs, "rename", async (from: string, to: string) => {
@@ -344,7 +349,8 @@ test("managed changes reject stale drafts without overwriting disk", async (t) =
     const before = await readSettings(path);
     await fs.writeFile(path, JSON.stringify(change));
     await assert.rejects(commitSettings(before, selection()), /changed.*stale/);
-    assert.deepEqual((await readSettings(path)).document, change);
+    const { piProfiles: _legacy, ...expected } = change;
+    assert.deepEqual((await readSettings(path)).document, expected);
   }
 });
 
@@ -401,6 +407,7 @@ test("atomic replacement exposes complete old-or-new JSON to unlocked readers", 
     ...selection("new"),
     packages: Array.from({ length: 3000 }, (_, i) => `./pkg-${i}`),
   };
+  const oldGlobalFingerprint = fingerprint(JSON.parse(await fs.readFile(path, "utf8")));
   let done = false;
   const writing = commitSettings(before, next).finally(() => {
     done = true;
@@ -408,7 +415,7 @@ test("atomic replacement exposes complete old-or-new JSON to unlocked readers", 
   do {
     const document = JSON.parse(await fs.readFile(path, "utf8")) as GlobalSettings;
     const { piProfiles: _metadata, ...nextGlobal } = next;
-    assert.ok([before.fingerprint, fingerprint(nextGlobal)].includes(fingerprint(document)));
+    assert.ok([oldGlobalFingerprint, fingerprint(nextGlobal)].includes(fingerprint(document)));
   } while (!done);
   await writing;
 });
@@ -422,7 +429,7 @@ test("write and rename failures remove temporary files and release the lock", as
     });
     await assert.rejects(commitSettings(before, selection("other")), /denied/);
     mocked.mock.restore();
-    assert.deepEqual(await fs.readdir(dir), ["settings.json"]);
+    assert.deepEqual(await fs.readdir(dir), ["pi-profiles.json", "settings.json"]);
     assert.deepEqual(await readSettings(path), before);
     const release = await lockfile.lock(path, { realpath: false });
     await release();
